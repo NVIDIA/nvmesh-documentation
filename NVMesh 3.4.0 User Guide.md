@@ -45,6 +45,7 @@ SPDX-License-Identifier: Apache-2.0
       - [RAID-6 (8+2) Logical Volumes with Dual Node Failure Protection](#raid-6-82-logical-volumes-with-dual-node-failure-protection)
       - [Supported Erasure-coded Volume Combinations](#supported-erasure-coded-volume-combinations)
       - [Target Node Redundancy](#target-node-redundancy)
+    - [Thin Provisioned Volumes](#thin-provisioned-volumes)
   - [Access Modes](#access-modes)
   - [Zones](#zones)
   - [Minimal Configurations](#minimal-configurations)
@@ -143,6 +144,9 @@ SPDX-License-Identifier: Apache-2.0
     - [Verify Client and Target Registration](#verify-client-and-target-registration)
     - [Create a Volume](#create-a-volume)
     - [Attach a Volume to a Client](#attach-a-volume-to-a-client)
+    - [Create a CDV](#create-a-cdv)
+    - [Create a TPV](#create-a-tpv)
+    - [Attach a TPV to a Client](#attach-a-tpv-to-a-client)
 - [General Settings](#general-settings)
 - [Client and Target Configuration](#client-and-target-configuration)
   - [Configuration Profiles](#configuration-profiles)
@@ -198,6 +202,8 @@ SPDX-License-Identifier: Apache-2.0
     - [Status](#status)
     - [Health](#health)
     - [Volume’s per-Client State](#volumes-per-client-state)
+  - [CDV State](#cdv-state)
+  - [TPV State](#tpv-state)
   - [Client State](#client-state)
   - [Target State](#target-state)
   - [PROC-fs (/proc) Statistics](#proc-fs-proc-statistics)
@@ -313,11 +319,14 @@ We continually try to improve the quality and usefulness of documentation. If yo
 
 | Acronym | Description |
 | --- | --- |
+| CDV | Capacity Data Volume. A fully-provisioned NVMesh backing-store volume that acts as a physical storage pool for thin provisioned volumes (TPVs). |
+| CDV-mgmt | A satellite volume automatically created and managed by the system alongside each CDV. It holds TOMA allocator metadata and must not be modified or deleted by the administrator. |
 | Hidden volume | A hidden volume is a volume or a part of a volume attached to a client for the client to perform recovery operations on the volume. Such attachments happen only on targets. <br><br> As the volume is only attached for recovery by the storage system, it does not have a /dev device. |
 | NVMeOF | The NVMe over Fabrics standard. |
 | RDMA IO | This is IO executed using RoCE or InfiniBand for communication. |
 | SIW | SoftiWarp, which provides an RDMA API, but performs communication over TCP without RDMA. <br>Often referred to as TCP in module parameter names. |
 | SIW IO | This is IO executed using SIW for communication, in contrast to RDMA IO. |
+| TPV | Thin Provisioned Volume. A sparse block device that presents a configurable virtual size to the client and draws physical extents from a parent CDV only as data is written. |
 
 # Introduction to NVMesh Technology
 
@@ -838,6 +847,36 @@ RAID-6 volumes protect against both drive and host failures. The minimum number 
 | --- | --- | --- | --- |
 | 6+2 | 8 targets | 4 targets | 1 target |
 | 8+2 | 10 targets | 5 targets | 1 target |
+
+### Thin Provisioned Volumes
+
+<!-- ALPHA FEATURE: Thin provisioning is an alpha-stage feature. It must not be used with real or production data. Functionality may be incomplete or may fail in unexpected ways. Issues related to this feature should not be filed at this time. -->
+
+> **⚠️ Alpha Feature:** Thin provisioning is an alpha-stage feature and must not be used with real or production data. Functionality may be incomplete or may fail in unexpected ways. Issues related to this feature should not be opened at this time.
+
+Thin provisioned volumes allow presenting a large virtual capacity to applications while consuming physical storage only as data is actually written. This is sometimes referred to as storage over-subscription and is useful in environments where application datasets grow gradually and physical capacity should be committed incrementally rather than up front.
+
+The thin provisioning feature is built upon two volume types that work in concert:
+
+- A **Capacity Data Volume (CDV)** is a fully-provisioned NVMesh backing-store volume that acts as a physical storage pool. It is created and allocated from drives using the same RAID types and drive selection criteria as any other NVMesh volume, but with additional CDV-specific configuration. CDVs are never attached directly by user applications; their sole purpose is to provide physical storage extents to TPVs.
+
+- A **Thin Provisioned Volume (TPV)** is a sparse block device that presents a configurable virtual size to the client. Physical storage extents are drawn from the parent CDV only when data is written to previously unwritten addresses. The virtual size of a TPV may exceed the physical capacity of the backing CDV, enabling storage over-subscription.
+
+**CDV-mgmt satellite volumes**
+
+When a CDV is created, the system automatically creates an internal satellite volume named `<CDV_name>-mgmt` alongside it. This satellite holds allocator metadata used by TOMA to track which CDV extents are free, allocated, or pending reclaim. The CDV-mgmt volume is managed entirely by the system. It does not appear in the regular volumes table and must not be modified or deleted by the administrator.
+
+**Attachment constraints**
+
+A TPV supports only the exclusive read-write access mode. Only a single client may have a given TPV attached at any time. The shared and read-only access modes are not available for TPVs.
+
+When a TPV is attached to a client, the management layer automatically attaches the backing CDV to that client and to the relevant TOMA nodes as a hidden system attachment. When the TPV is detached, these hidden attachments are released automatically. CDVs should not be manually attached or detached.
+
+**Capacity management**
+
+The physical capacity of the CDV is divided into extents of a configurable granularity. DISCARD/TRIM commands issued by the client OS return extents that are no longer needed back to the CDV pool for reuse.
+
+If all CDV extents are consumed and a client attempts to write to a virtual address that has not yet been backed by a physical extent, the write operation will block indefinitely. There is no immediate I/O error; the application will appear to hang on the write call. CDV utilization is monitored against two configurable thresholds set in General Settings: when the first threshold is crossed the CDV is marked Almost Full; when the second threshold is crossed it becomes Critical. Administrators should take action when a CDV is marked Almost Full to avoid reaching the Critical state and eventually exhausting the pool entirely. See [CDV State](#cdv-state) and [Attach a TPV to a Client](#attach-a-tpv-to-a-client) for details.
 
 ## Access Modes
 
@@ -2498,6 +2537,60 @@ See the [Volume Status Example](#volume-status-example) section for methods to g
 
 The block device is ready to be used just like any local NVMe or other block device. You can create a file system on it or use it as a raw block device. On subsequent service restarts, the device will automatically be attached if it was attached at service stop time and the configuration profile for this client is defined to perform auto-attach, which is the default. To prevent this behavior, explicitly detach the device via the management server using the same buttons.
 
+### Create a CDV
+
+<!-- TODO: Screenshots in this section are not yet updated to reflect the thin provisioning UI. This is intentional for the current release. -->
+
+CDVs are created from the Volumes section of the GUI, accessible from the left side menu. Click the + button and select CDV as the volume type. The dialog presents the following fields:
+
+| Field | Description |
+| --- | --- |
+| **Name** | A short name without special characters. This name is also used as the base for the automatically created `<name>-mgmt` satellite volume. |
+| **Description** | An optional human-readable description. |
+| **Capacity** | The total physical size of the CDV pool. This is the aggregate backing storage from which TPV extents will be allocated. |
+| **Unit Type** | The capacity unit. |
+| **CDV Extent Size** | The granularity at which CDV space is divided and leased to TPVs. Must be a power of 2 in the range 64 MB–64 GB. Smaller values provide finer-grained allocation at the cost of higher metadata overhead. This parameter cannot be changed after creation. |
+| **Allocator Size** | The amount of space reserved at the start of the CDV for the TOMA allocator's internal metadata. Defaults to 1 GB. This space is not available for data extents. This parameter cannot be changed after creation. |
+| **Max TPVs** | The maximum number of TPVs that may simultaneously use this CDV. Defaults to 512. This parameter cannot be changed after creation. |
+| **Volume Provisioning Group / Custom** | Selects the RAID type, target classes, and drive classes for the CDV's physical allocation, using the same options as for regular volumes. See [Volume Provisioning Groups](#volume-provisioning-groups). |
+
+After the CDV is created, a `<name>-mgmt` satellite volume is automatically created. Both the CDV and its satellite will be visible in the system.
+
+**<u>Note:</u>** The CDV extent size, allocator size, and max TPVs parameters are fixed at creation time and cannot be modified afterwards. Plan accordingly.
+
+### Create a TPV
+
+TPVs are created from the Thin Provisioning section of the GUI, accessible from the left side menu. Click the + button to open the TPV creation dialog with the following fields:
+
+| Field | Description |
+| --- | --- |
+| **Name** | A short name without special characters. The client will present this TPV as `/dev/nvmesh/<name>`. |
+| **Description** | An optional human-readable description. This is the only TPV field that may be changed after creation. |
+| **Parent CDV** | The CDV that will back this TPV. The TPV will draw its physical extents from this CDV's pool. |
+| **Virtual Size** | The size of the block device as presented to the client. This may be set larger than the total physical CDV capacity to achieve over-subscription. The virtual size may be increased after creation but cannot be reduced. |
+| **Unit Type** | The virtual size unit. |
+| **TPV Extent Size** | The granularity at which virtual addresses are mapped to physical CDV extents. Must be a power of 2 in the range 64 KB–64 MB, and must not exceed the CDV Extent Size of the parent CDV. Smaller values allow finer-grained space reclamation via DISCARD/TRIM commands issued by the client OS. This parameter cannot be changed after creation. |
+
+**<u>Note:</u>** The capacity usage bar shown in the regular volume creation dialog is not shown for TPVs, as a TPV's physical consumption is determined dynamically as data is written rather than at creation time.
+
+### Attach a TPV to a Client
+
+TPVs are attached to clients using the same Attach/Detach button in the Clients table used for regular volumes. The following behaviors specific to TPVs apply:
+
+- The reservation mode is fixed to **Exclusive Read-Write** and cannot be changed. A TPV may only be attached to one client at a time.
+- When a TPV is attached, management automatically attaches the backing CDV and its CDV-mgmt satellite to the client as hidden system volumes. These appear in the dedicated **CDV Attachments** and **CDV-Mgmt Attachments** columns in the Clients table and must not be manually detached.
+- When the TPV is detached, the associated CDV hidden attachment is released automatically.
+
+**TPV capacity and space management**
+
+When the backing CDV pool is fully consumed, any client write to a previously unallocated virtual address will block indefinitely. There is no immediate I/O error; the application will appear to hang. To restore normal operation, free capacity in the CDV pool using one or more of the following methods:
+
+1. Issue DISCARD/TRIM commands from the client OS on the TPV to return extents that no longer hold active data back to the pool.
+2. Delete TPVs backed by this CDV that are no longer needed.
+3. Extend the CDV's physical capacity by increasing its volume size from the Volumes section of the GUI.
+
+CDV utilization is monitored against two configurable thresholds set in General Settings. When the first threshold is crossed, the CDV is marked Almost Full; when the second threshold is crossed, it becomes Critical. Monitor CDV utilization via the [Dashboard](#dashboard) and [CDV State](#cdv-state) sections and take action when a CDV is marked Almost Full to avoid exhausting the pool entirely.
+
 # General Settings
 
 In the NVMesh GUI, click Settings and then click General to reach the general settings governing various aspects of NVMesh behavior. After making any changes in settings, use the "Save" button at the top of the panel to persist them.
@@ -2529,6 +2622,9 @@ The following table describes these general settings:
 | Zones - <br> Selection Weights | Number of Targets in Zone | The weight to attribute to the number of targets in a zone. A larger number of targets increases the chance the zone will be chosen. <br>Default is 120. |
 | Zones - <br> Selection Weights | Average Time in <br>Zone Allocation <br>Queue | The time weight to attribute to time spent in allocation. A larger amount of time spent decreases the chance the zone will be chosen. <br>Default is 50. |
 | Zones - <br> Selection Weights | Logging | Logging Level |
+| Thin Provisioning | CDV Almost Full Threshold | The CDV utilization percentage at which a CDV transitions to the Almost Full (Alarm) state and a warning alert is raised. Should be set below the Critical threshold. |
+| Thin Provisioning | CDV Critical Threshold | The CDV utilization percentage at which a CDV transitions to the Critical state and a critical alert is raised. At this point the CDV pool is nearly exhausted and write operations to its TPVs are at risk of blocking. |
+| Thin Provisioning | CDV Extent Zero on Free | Controls whether extents returned to the CDV pool after a TPV deletion or a DISCARD operation are zero-written before becoming available for reallocation. <br>When enabled, freed extents are zeroed in the background by TOMA; they remain unavailable for reallocation until zeroing completes. This prevents data from a deleted TPV from being visible to a future TPV at the cost of delayed pool replenishment. <br>When disabled (default), freed extents are returned to the pool immediately without zeroing. <br>⚠️: Enabling this setting may introduce latency in CDV pool replenishment after TPV deletions or DISCARD operations. |
 
 # Client and Target Configuration
 
@@ -2799,6 +2895,8 @@ For convenience, NVMesh includes default VPGs to assist in volume creation as de
 | DEFAULT_STRIPED_EC_DUAL_TARGET_REDUNDANCY_VPG | For generating 8+2 striped and erasure coded volumes with full separation with a stripe width of 2. <br>For such volumes, drive space will be required from at least 20 drives spread across at least 10 targets. <br>**Note: This functionality is not production grade in this version. <br> This should not be used!** |
 | DEFAULT_METADATA_RAID_1_VPG | Obsolete, will be removed in an upcoming release. <br>**This should not be used!** |
 
+**<u>Note:</u>** VPGs apply to CDV creation. When creating a CDV, the selected VPG determines the RAID type, drive classes, and target classes for its physical allocation, in the same way as for regular volumes. VPGs do not apply to TPV creation, as TPVs have no direct physical allocation and derive their storage from the parent CDV.
+
 ## Protection Domains
 
 Protection domains are a mechanism to assist in ensuring data availability is aligned to specific data center protection requirements.
@@ -2873,6 +2971,8 @@ Volumes can be attached to or detached from clients using the GUI.
       1. See this [link](https://gitlab-master.nvidia.com/excelero/nvmesh-csi-driver/-/blob/master/docs/src/usage/cross-namespace-volumes.md) (**TBD: make this publicly available.**) for more information.
       1. Setting the reference ID via the GUI will save this information for the current attach or detach operation.
    1. Emulation mode is obsolete functionality originally intended for NVMesh User-mode.
+
+**<u>Note:</u>** When attaching a TPV, the reservation mode is fixed to **Exclusive Read-Write** and cannot be changed. Shared and read-only attachment modes are not supported for TPVs. For more detail, see [Attach a TPV to a Client](#attach-a-tpv-to-a-client).
 
 ### Attachment Status
 
@@ -3276,6 +3376,8 @@ The capacity sub-section provides the following graphical elements:
 |   Orange    |  60 – 80%  |
 |     Red     |  Over 80%  |
 
+- The **CDV Pool Utilization** gauge shows the aggregate physical capacity and utilization across all CDVs in the system. This is distinct from the Allocation Chart above, which reflects raw drive space consumed by fully-provisioned volumes. CDVs that have crossed the Almost Full or Critical utilization thresholds (configured in General Settings) are highlighted accordingly.
+
 ### Alerts
 
 Recent non-acknowledged alerts are presented in this section.
@@ -3337,23 +3439,74 @@ When a volume is attached to a client, the volume state can differ between clien
 
 Clients send status reports on their attachments to management. This is reflected in the Clients section of the GUI in the Volume Attachments column. For each client, there is a list of the volumes to which it is attached. A green background color indicates that IO is enabled or functional, while a red one indicates that IO is disabled. When IO is disabled, follow the instructions at [Volume Status Example](#volume-status-example) to get more information on the specific client’s status for the specific volume.
 
+## CDV State
+
+<!-- TODO: Screenshots in this section are not yet updated to reflect the thin provisioning UI. This is intentional for the current release. -->
+
+The CDV table is accessible from the Thin Provisioning section of the GUI, accessible from the left side menu. It presents the current state of all Capacity Data Volumes in the cluster.
+
+| Column | Description |
+| --- | --- |
+| **Name** | The CDV name. Click to open a detailed view of the volume’s physical layout and associated TPVs. |
+| **Description** | The user-supplied description. |
+| **Capacity** | The total physical size of the CDV pool. |
+| **Extent Size** | The CDV extent granularity set at creation time. Physical space is allocated to TPVs in multiples of this size. |
+| **Allocated Extents** | The number of CDV extents currently allocated to TPVs, as reported by the TOMA allocator. |
+| **Free Extents** | The number of extents currently available for allocation, calculated as total data extents minus allocated extents. |
+| **Over-Provision** | The ratio of the aggregate virtual size of all TPVs backed by this CDV to the CDV’s physical capacity, shown as a multiplier (e.g., `2.50x`). A value greater than `1.00x` indicates that the total virtual capacity presented to clients exceeds the physical pool. |
+| **Max CDV Size** | The maximum amount of data the CDV can track, determined by the capacity of its CDV-mgmt satellite: the satellite holds one metadata entry per CDV data extent, so the theoretical maximum addressable data size is the number of satellite entries multiplied by the CDV extent size. |
+| **RAID Level** | The RAID type of the CDV’s physical allocation. |
+| **Stripe Width** | The number of drives across which a single stripe is spread, for striped RAID types. |
+| **Data Blocks** | The number of data blocks per stripe. |
+| **Parity Blocks** | The number of parity or mirror copies per stripe. |
+| **Last Modified By** | The user who last modified the CDV. |
+| **Last Date Modified** | The date and time of the last modification. |
+| **TPVs** | The current number of TPVs backed by this CDV, shown as `current / maximum`. |
+| **Action** | The most recent or in-progress administrative action on the CDV, using the same semantics as for regular volumes. See [Action](#action). |
+| **Status** | The availability status of the CDV (Online, Offline, etc.), using the same semantics as for regular volumes. See [Status](#status). |
+| **Actions** | Opens the edit dialog for the CDV. |
+
+When a CDV crosses the Almost Full threshold (configurable in General Settings), an alert is generated and appears in the Alerts section of the Dashboard. When the Critical threshold is crossed, a more severe alert is raised. If the CDV becomes fully exhausted, write operations to TPVs backed by it will block indefinitely. See [Attach a TPV to a Client](#attach-a-tpv-to-a-client) for recovery options.
+
+## TPV State
+
+The TPV table is accessible from the Thin Provisioning section of the GUI, accessible from the left side menu. It presents the current state of all thin provisioned volumes in the cluster.
+
+| Column | Description |
+| --- | --- |
+| **Name** | The TPV name. |
+| **Parent CDV** | The name of the CDV providing physical backing for this TPV. |
+| **Virtual Size** | The size of the block device as presented to the client. |
+| **Extent Size** | The virtual-to-physical mapping granularity set at TPV creation time. |
+| **CDV Extents** | The number of CDV extents currently assigned to this TPV by the TOMA allocator. |
+| **TPV Extents In Use** | The number of virtual extents currently mapped to physical storage, shown as `in use / total virtual extents`. |
+| **Client** | The client to which this TPV is currently exclusively attached. Shows the client name, or *(Detached)* if no client is attached. An **Evicting** badge is shown when the TPV's exclusive attachment is in the process of being released from a client. |
+| **Encryption** | The encryption state of the TPV: **Encrypted** (green), **Init Required** (yellow), **In Progress** (blue), **Error** (red), or — if encryption is not enabled. |
+| **Status** | The availability status of the TPV (Online, Offline, etc.). IO availability is dependent on the availability of the parent CDV. |
+| **Actions** | Opens the edit dialog for the TPV. Only the Description field may be changed after creation. |
+
+**<u>Note:</u>** All TPV configuration fields other than Description are immutable after creation. To increase the virtual size of a TPV, use the Extend operation available in the TPV table row actions. The virtual size may only be increased, not reduced.
+
 ## Client State
 
 The current client state as perceived by management is reflected in the Clients table.
 
-The Volume Attachments column lists the volumes that are supposed to be attached to the client. The background color is used to reflect state.
+The Clients table contains the following columns:
 
-The Recovery Attachments column presents the volumes attached to a client for volume recovery or encryption purposes, as a "hidden" volume attachment that is not available for regular IO operations.
+| Column | Description |
+| --- | --- |
+| **Client** | The client ID. |
+| **Volume Attachments** | Regular (fully-provisioned) volumes attached to this client. Background color reflects IO state: green indicates IO is enabled, red indicates IO is disabled. |
+| **TPV Attachments** | Thin provisioned volumes attached to this client. Background color reflects IO state using the same convention as Volume Attachments. |
+| **CDV Attachments** | CDVs automatically attached to this client as backing store for its TPVs. These are hidden system attachments managed by the management layer and should not be detached manually. |
+| **CDV-Mgmt Attachments** | CDV-mgmt satellite volumes automatically attached to this client. These are internal system attachments. |
+| **Attachments Actions** | Operations currently in progress for volume attachments or detachments. |
+| **Recovery Attachments** | Volumes attached to this client for volume recovery or encryption purposes. These are hidden attachments not available for regular IO operations. |
+| **Config Profile** | The configuration profile currently applied to this client. A yellow warning triangle indicates that the client requires a restart to apply a recent profile change. |
+| **Version** | The NVMesh client software version. |
+| **Health** | The health state of the client. A green checkmark indicates normal operation; a yellow triangle indicates a warning condition; a red circle indicates an error state. Hovering over the icon provides additional detail. |
 
-The Attachments Actions column shows operations that have been initiated for the attachment or detachment of volumes that are still in process.
-
-- A green background indicates a successful attachment with IO enabled for the volume on this client specifically.
-
-- A red background indicates that the attachment itself failed or that IO is currently disabled.
-
-After configuration changes, for instance via configuration profiles, it is necessary to restart the client to apply the changes. When the system recognizes this situation, a yellow warning triangle will appear to the left of the configuration profile name in the Config Profile column.
-
-The Health column provides information on the livelihood of the client. Hovering over the icon in the column will provide additional info.
+The health icon detail for the Health column is as follows:
 
 - A checkmark within a green circle indicates normal functioning.
 
