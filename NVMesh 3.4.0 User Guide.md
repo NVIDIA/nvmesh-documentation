@@ -878,6 +878,24 @@ The physical capacity of the CDV is divided into extents of a configurable granu
 
 If all CDV extents are consumed and a client attempts to write to a virtual address that has not yet been backed by a physical extent, the write operation will block indefinitely. There is no immediate I/O error; the application will appear to hang on the write call. CDV utilization is monitored against two configurable thresholds set in General Settings: when the first threshold is crossed the CDV is marked Almost Full; when the second threshold is crossed it becomes Critical. Administrators should take action when a CDV is marked Almost Full to avoid reaching the Critical state and eventually exhausting the pool entirely. See [CDV State](#cdv-state) and [Attach a TPV to a Client](#attach-a-tpv-to-a-client) for details.
 
+**Split data and metadata placement (Alpha)**
+
+A TPV can optionally be created so that its internal mapping tree (the structure that records which virtual address lives on which physical extent) is held on a *second* CDV, separate from the CDV that stores user data. This is called a **split-mode TPV**.
+
+Why split? The mapping-tree workload is dominated by small, latency-sensitive writes that the system issues whenever previously-unwritten virtual addresses are touched. Small writes perform best on mirror-backed storage (for example, 3-way mirror). The user data itself is typically large sequential I/O and stores most efficiently on erasure-coded storage. Split mode lets the administrator pair an erasure-coded data CDV with a mirror-backed metadata CDV, giving each workload shape the storage class it likes. Single-CDV TPVs continue to work exactly as before — the split choice is per-TPV and purely optional.
+
+When creating a split-mode TPV the administrator supplies both CDV names and the TPV extent size for each side. The **metadata CDV capacity is auto-sized by management** from the TPV virtual size and the two extent sizes — the user never specifies it directly. If the TPV is later extended, the metadata capacity is re-computed and, if needed, auto-grown; an extend that cannot fit on the metadata CDV is refused atomically (no partial change).
+
+**Rules and limitations:**
+
+- The choice of single- vs. split-mode is made at TPV create time and cannot be changed later in this release. A single-CDV TPV cannot be converted to split-mode, and a split-mode TPV cannot be converted back.
+- The data and metadata CDVs must be different CDVs. Any CDV may be used for either role, and one CDV may back the data side of one TPV and the metadata side of another, bounded by each CDV's **maxTPVs**.
+- Recommended pairing: erasure-coded data CDV, 3-way mirror metadata CDV. The UI does not enforce this; a **description** field on each CDV is a good place to record the intended role for operator discoverability.
+- Encryption (per-TPV LUKS) wraps only the user-data path. The metadata CDV stays plaintext regardless of whether the TPV is encrypted, because it holds only mapping pointers — no user data.
+- CDV capacity warnings apply to both CDVs independently. Either side reaching capacity will stall new allocations on the TPV.
+
+In the CLI this is exposed as optional `--tpv-config-meta-cdv-id` and `--tpv-config-meta-tpv-extent-size-kb` options on `nvmesh tpv create`; in the UI as a **"Split data and metadata across two CDVs"** toggle on the Create TPV dialog; in the CSI driver as optional `metaCdvName` / `metaCdvNameRegex` / `metaTpvExtentSizeKB` StorageClass parameters. Omitting these selects the classic single-CDV layout.
+
 ## Access Modes
 
 By default, NVMesh volumes are shared read-write volumes enabling multiple clients to attach to the same volume. However, for some use cases, it is useful to ensure the volume is being accessed only by a single client exclusively or is in a read-only mode. A volume can be accessed with a single access mode across the entire cluster and this is considered the volume’s current mode. If a volume is not attached to any client, it will not have a mode.
@@ -2566,12 +2584,17 @@ TPVs are created from the Thin Provisioning section of the GUI, accessible from 
 | --- | --- |
 | **Name** | A short name without special characters. The client will present this TPV as `/dev/nvmesh/<name>`. |
 | **Description** | An optional human-readable description. This is the only TPV field that may be changed after creation. |
-| **Parent CDV** | The CDV that will back this TPV. The TPV will draw its physical extents from this CDV's pool. |
+| **Data CDV** | The CDV that will back this TPV's user data. Labelled **Parent CDV** in single-CDV mode. |
 | **Virtual Size** | The size of the block device as presented to the client. This may be set larger than the total physical CDV capacity to achieve over-subscription. The virtual size may be increased after creation but cannot be reduced. |
 | **Unit Type** | The virtual size unit. |
-| **TPV Extent Size** | The granularity at which virtual addresses are mapped to physical CDV extents. Must be a power of 2 in the range 64 KB–64 MB, and must not exceed the CDV Extent Size of the parent CDV. Smaller values allow finer-grained space reclamation via DISCARD/TRIM commands issued by the client OS. This parameter cannot be changed after creation. |
+| **TPV Extent Size** | The granularity at which virtual addresses are mapped to physical CDV extents. Must be a power of 2 in the range 64 KB–64 MB, and must not exceed the CDV Extent Size of the Data CDV. Smaller values allow finer-grained space reclamation via DISCARD/TRIM commands issued by the client OS. This parameter cannot be changed after creation. |
+| **Split data and metadata across two CDVs** | *(Optional, Alpha)* A toggle that places the TPV's internal mapping tree on a second CDV — see the Thin Provisioned Volumes overview earlier in this document. Off by default. When enabled, two additional fields appear. |
+| **Metadata CDV** | *(Split mode only)* The CDV that will hold the TPV's L1/L2 mapping tree. Must be different from the Data CDV. Pairing a mirror-backed metadata CDV with an erasure-coded data CDV is the recommended shape for best allocation-path latency. |
+| **Metadata Extent Size** | *(Split mode only)* The granularity on the metadata CDV. Same range as TPV Extent Size; independent from the data-side value. The dialog shows an auto-computed **metadata capacity** (Alpha: in GiB), which is how much of the metadata CDV the TPV will reserve. This capacity is auto-grown on extend. |
 
 **<u>Note:</u>** The capacity usage bar shown in the regular volume creation dialog is not shown for TPVs, as a TPV's physical consumption is determined dynamically as data is written rather than at creation time.
+
+**<u>Note:</u>** The split vs. single-CDV choice is fixed at TPV create time in this release. Converting between the two after creation is not supported.
 
 ### Attach a TPV to a Client
 
