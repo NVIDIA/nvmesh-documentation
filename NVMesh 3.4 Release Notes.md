@@ -118,6 +118,8 @@ The following features are considered Alpha and not intended for use by end-user
 
 - **upgrade-agent, upgrade, upgrade-step, component, release, platform** \- these are new commands related to NDU. These are partial implementations that are not qualified for production operations.
 
+- **Split-mode Thin-Provisioned Volumes (TPV metadata CDV).** A TPV can optionally be created with its L1/L2 mapping tree on a second CDV, allowing the admin to pair an erasure-coded data CDV with a mirror-backed metadata CDV for improved small-write latency on the allocation path. Selected at TPV create time by supplying **metaCdvId** + **metaTpvExtentSizeKB** in the CLI/CSI/UI; omitting the meta parameters selects the existing single-CDV layout. The metadata CDV capacity is auto-sized by management from the TPV virtual size and extent geometries, and is auto-grown on **tpv extend**. mNDU note: split-mode TPVs require the new management **and** new client kernel (the kernel decodes a new **metaCdvUUID** MCS field) — upgrade order is management first, then client kernels, before any split-mode TPV is created. The one-way create-time choice cannot be converted later in this release.
+
 # Resolved Issues
 
 <!--
