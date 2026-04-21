@@ -3498,14 +3498,16 @@ The TPV table is accessible from the Thin Provisioning section of the GUI, acces
 | Column | Description |
 | --- | --- |
 | **Name** | The TPV name. |
-| **Parent CDV** | The name of the CDV providing physical backing for this TPV. |
+| **Data CDV** | The name of the Carrier Direct Volume that stores the TPV's user data. |
+| **Metadata CDV** | The name of the Carrier Direct Volume that stores the TPV's L1/L2 mapping tree (split-mode TPVs only; shows `—` for single-CDV TPVs). |
 | **Virtual Size** | The size of the block device as presented to the client. |
-| **Extent Size** | The virtual-to-physical mapping granularity set at TPV creation time. |
-| **CDV Extents** | The number of CDV extents currently assigned to this TPV by the TOMA allocator. |
+| **Extent Size** | The virtual-to-physical mapping granularity for the data side, set at TPV creation time. |
+| **Meta Extent Size** | The mapping granularity on the metadata CDV (split-mode TPVs only; shows `—` for single-CDV TPVs). |
+| **CDV Extents** | The number of CDV extents currently assigned to this TPV by the TOMA allocator (data side). |
 | **TPV Extents In Use** | The number of virtual extents currently mapped to physical storage, shown as `in use / total virtual extents`. |
 | **Client** | The client to which this TPV is currently exclusively attached. Shows the client name, or *(Detached)* if no client is attached. An **Evicting** badge is shown when the TPV's exclusive attachment is in the process of being released from a client. |
 | **Encryption** | The encryption state of the TPV: **Encrypted** (green), **Init Required** (yellow), **In Progress** (blue), **Error** (red), or — if encryption is not enabled. |
-| **Status** | The availability status of the TPV (Online, Offline, etc.). IO availability is dependent on the availability of the parent CDV. |
+| **Status** | The availability status of the TPV (Online, Offline, etc.). IO availability depends on both the data CDV and, for split-mode TPVs, the metadata CDV — the TPV degrades if either is non-Online. |
 | **Actions** | Opens the edit dialog for the TPV. Only the Description field may be changed after creation. |
 
 **<u>Note:</u>** All TPV configuration fields other than Description are immutable after creation. To increase the virtual size of a TPV, use the Extend operation available in the TPV table row actions. The virtual size may only be increased, not reduced.
