@@ -2584,7 +2584,7 @@ TPVs are created from the Thin Provisioning section of the GUI, accessible from 
 | --- | --- |
 | **Name** | A short name without special characters. The client will present this TPV as `/dev/nvmesh/<name>`. |
 | **Description** | An optional human-readable description. This is the only TPV field that may be changed after creation. |
-| **Data CDV** | The CDV that will back this TPV's user data. Labelled **Parent CDV** in single-CDV mode. |
+| **Carrier Direct Volume (CDV)** (abbreviated **Data CDV** in table columns) | The CDV that will back this TPV's user data. The column in the TPV list uses the short "Data CDV" form due to width constraints; the create dialog and this guide use the full name. |
 | **Virtual Size** | The size of the block device as presented to the client. This may be set larger than the total physical CDV capacity to achieve over-subscription. The virtual size may be increased after creation but cannot be reduced. |
 | **Unit Type** | The virtual size unit. |
 | **TPV Extent Size** | The granularity at which virtual addresses are mapped to physical CDV extents. Must be a power of 2 in the range 64 KB–64 MB, and must not exceed the CDV Extent Size of the Data CDV. Smaller values allow finer-grained space reclamation via DISCARD/TRIM commands issued by the client OS. This parameter cannot be changed after creation. |
