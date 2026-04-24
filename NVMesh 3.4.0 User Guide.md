@@ -147,6 +147,7 @@ SPDX-License-Identifier: Apache-2.0
     - [Create a CDV](#create-a-cdv)
     - [Create a TPV](#create-a-tpv)
     - [Attach a TPV to a Client](#attach-a-tpv-to-a-client)
+    - [Offline Compaction](#offline-compaction)
 - [General Settings](#general-settings)
 - [Client and Target Configuration](#client-and-target-configuration)
   - [Configuration Profiles](#configuration-profiles)
@@ -2613,6 +2614,78 @@ When the backing CDV pool is fully consumed, any client write to a previously un
 3. Extend the CDV's physical capacity by increasing its volume size from the Volumes section of the GUI.
 
 CDV utilization is monitored against two configurable thresholds set in General Settings. When the first threshold is crossed, the CDV is marked Almost Full; when the second threshold is crossed, it becomes Critical. Monitor CDV utilization via the [Dashboard](#dashboard) and [CDV State](#cdv-state) sections and take action when a CDV is marked Almost Full to avoid exhausting the pool entirely.
+
+### Offline Compaction
+
+> **⚠️ Alpha Feature:** TPV offline compaction follows the same alpha-stage disclaimer as thin provisioning. Functionality may be incomplete and must not be used with production data in this release.
+
+Over time a TPV can become *fragmented*: each CDV extent owned by the TPV ends up with only a few slots actually mapped to virtual addresses, while the rest have been freed by DISCARD/TRIM. The CDV still has those extents reserved to this TPV even though they hold very little live data. Offline compaction reclaims those extents by relocating the remaining live slots into a smaller number of densely-packed extents and returning the now-empty extents to the CDV pool.
+
+Compaction is called *offline* because the TPV must not be attached to a guest application while it runs. The system performs the relocation by attaching the TPV to a chosen client in a hidden, maintenance-only mode, doing the work, and detaching when finished. No guest I/O is served during the run.
+
+#### When to run compaction
+
+- After a large DISCARD/TRIM operation (for example, deleting many files inside a filesystem on the TPV) if you want the freed capacity to be returned to the CDV pool rather than held by the TPV for future writes.
+- When the CDV is approaching its Almost Full threshold and you want to return capacity held by sparse TPVs before extending the CDV or deleting TPVs.
+- As part of periodic maintenance for long-lived TPVs with churn-heavy workloads.
+
+Compaction does not change the virtual size, on-disk contents, or client visibility of the TPV. It only reorganizes how the TPV's live data is laid out inside the CDV.
+
+#### Starting a compaction run
+
+A TPV must be detached from any guest client before compaction can start. From the CLI:
+
+```
+nvmesh tpv compact -n <tpv-name> [--client <host>] [--aggressiveness N]
+```
+
+- `--client` (optional) selects which NVMesh client host will run the compaction worker. Any healthy client that can reach the CDV is eligible. If omitted, management picks one at random.
+- `--aggressiveness` (optional, default 4) is the maximum number of slot relocations the kernel worker processes in parallel. Higher values finish faster but consume more CDV bandwidth during the run. Start at the default and raise only if the run is slower than desired and the hosting client has spare capacity.
+
+The command returns as soon as the run has been accepted and hands back the chosen client and initial state. The run itself proceeds in the background.
+
+#### Monitoring a run
+
+Use `compactShow` to check progress:
+
+```
+nvmesh tpv compactShow -n <tpv-name>
+```
+
+The output includes:
+
+- **state** — one of `attaching`, `running`, `aborting`, `completed`, `failed`, or `aborted`. The first three are in-flight; the last three are terminal.
+- **clientId** — the client hosting the compaction worker.
+- **progress.relocated / plannedRelocations / reclaimed** — live counters updated by the kernel worker. `relocated` is the number of live slots moved so far; `plannedRelocations` is the total that will be moved when the run finishes; `reclaimed` is the number of CDV extents returned to the pool.
+- **startedAt / progressUpdatedAt / finishedAt** — timestamps for the run.
+- **lastError** — present only on `failed`; describes the failure cause.
+
+Progress is also visible in the GUI on the Thin Provisioning page: the affected TPV shows a spinner and a percent-complete indicator while the run is active.
+
+#### Aborting a run
+
+A running compaction can be aborted at any time:
+
+```
+nvmesh tpv compact -n <tpv-name> --abort
+```
+
+Abort is idempotent — issuing it on a TPV whose compaction has already finished returns success without changing anything. After abort, the TPV ends up in the `aborted` terminal state. Any extents the worker had already reclaimed before the abort remain reclaimed; any relocations in flight are rolled back so the on-disk data is consistent.
+
+#### Asymmetric preempt: guest attach wins
+
+If a guest application requests an attach of the TPV while a compaction run is in progress, management transparently aborts the compaction first and then allows the guest attach to proceed. The compaction job ends in state `aborted` with `lastError: preempted-by-guest-attach`. This rule gives user-visible I/O priority over maintenance and means an operator never needs to remember to abort a background compaction before using a TPV.
+
+#### Recovery
+
+Compaction operates only on the TPV's internal extent layout — it never modifies user data on the block device. If the compaction client, management server, or network fails during a run, the on-disk state of the TPV is left consistent: any relocations that had committed their metadata are visible to future attaches; any in-flight ones are rolled back on the next attach.
+
+Management automatically transitions stuck jobs to terminal:
+
+- If management restarts while a compaction was running, it reconciles on the next startup: jobs whose compaction client has stopped reporting progress are marked `failed` and the hidden maintenance attach is released.
+- While management is running, a heartbeat watchdog detects the same condition within a minute and marks the job `failed` without waiting for a restart.
+
+In both cases the TPV returns to normal availability for guest attach immediately. A subsequent compaction run may be issued against the same TPV at any time.
 
 # General Settings
 
