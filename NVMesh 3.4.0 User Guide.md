@@ -148,6 +148,7 @@ SPDX-License-Identifier: Apache-2.0
     - [Create a TPV](#create-a-tpv)
     - [Attach a TPV to a Client](#attach-a-tpv-to-a-client)
     - [Offline Compaction](#offline-compaction)
+    - [Online Compaction](#online-compaction)
 - [General Settings](#general-settings)
 - [Client and Target Configuration](#client-and-target-configuration)
   - [Configuration Profiles](#configuration-profiles)
@@ -2687,6 +2688,106 @@ Management automatically transitions stuck jobs to terminal:
 
 In both cases the TPV returns to normal availability for guest attach immediately. A subsequent compaction run may be issued against the same TPV at any time.
 
+### Online Compaction
+
+> **⚠️ Alpha Feature:** TPV online compaction follows the same alpha-stage disclaimer as thin provisioning. Functionality may be incomplete and must not be used with production data in this release.
+
+Online compaction reclaims fragmented CDV extents while the TPV remains attached and serving guest I/O. Unlike offline compaction, it requires no detach and causes no application downtime. It runs as a low-priority background worker on the client that holds the TPV, relocating one slot at a time alongside normal I/O traffic.
+
+**How it works.** The kernel client monitors a *wastage* metric — the fraction of CDV extents held by the TPV that contain fewer live slots than the extent can hold. When wastage exceeds the arm threshold the worker starts. It picks the sparsest extent as the source and the densest extent with room as the destination, copies the data, and atomically updates the virtual-to-physical mapping in the L1/L2 tree. Once a source extent empties, it is returned to the CDV pool, exactly as DISCARD would.
+
+A guest write that targets a slot while it is being relocated wins: the worker detects the conflict and aborts the relocation attempt (the slot stays at the source and the destination slot is recycled). Conflict aborts are counted in `/proc/nvmeibc/tpv/<name>/compaction` under `online.aborts_by_write_conflict` and are expected under write-heavy workloads.
+
+The worker disarms when wastage drops below the low threshold, or when no further consolidation is possible (all source extents have at most one live slot and there are no denser destination extents to absorb it).
+
+#### When to use online vs. offline compaction
+
+| Consideration | Online | Offline |
+|---|---|---|
+| TPV availability | Stays attached; guest I/O uninterrupted | Must be detached |
+| Throughput impact | Low (one relocation at a time, back-pressure gated) | Higher (configurable aggressiveness) |
+| Suited for | Continuous background reclamation during normal operation | One-shot recovery after large DISCARD or before a planned maintenance window |
+
+For most workloads, enabling online compaction at default thresholds and letting it run continuously is the recommended approach. Use offline compaction for an immediate, time-bounded reclamation pass.
+
+#### Enabling and configuring online compaction
+
+Online compaction is enabled per TPV and controlled by three parameters that may be set at create time or updated while the TPV is attached:
+
+| Parameter | Default | Description |
+|---|---|---|
+| **Online Compaction Enabled** | `true` | Master on/off switch. When `false`, the background worker never arms for this TPV regardless of wastage. |
+| **Arm High %** | `30` | Wastage percentage at which the worker arms and starts relocating. Range 1–100; must be strictly greater than Arm Low. |
+| **Arm Low %** | `15` | Wastage percentage at which the worker disarms. Range 0–99; must be strictly less than Arm High. Setting this to `0` inherits the cluster-wide module parameter default (15). |
+
+These values form a hysteresis band: the worker arms when wastage crosses **Arm High** upward and disarms when wastage drops below **Arm Low**. A narrow band (for example 25/20) keeps the worker active more continuously; a wide band (for example 60/10) lets fragmentation build before reacting.
+
+**At create time (CLI):**
+
+```
+nvmesh tpv create -n <name> \
+  --tpv-config-cdv-id <cdv> \
+  --capacity <size> \
+  --tpv-config-online-compaction-enabled true \
+  --tpv-config-online-compaction-arm-high-pct 40 \
+  --tpv-config-online-compaction-arm-low-pct 20
+```
+
+**After creation, while the TPV is attached (CLI):**
+
+```
+nvmesh tpv update -n <name> \
+  --tpv-config-online-compaction-arm-high-pct 40 \
+  --tpv-config-online-compaction-arm-low-pct 20
+```
+
+The management server validates the range (Arm Low < Arm High) and rejects the request with an error if the invariant is violated. The client kernel module applies the new values without interrupting guest I/O.
+
+**In the GUI**, the three controls appear in the Create TPV dialog under **Online Compaction**, and in the TPV detail view as editable fields.
+
+#### Monitoring online compaction
+
+The per-TPV compaction state is visible in the Thin Provisioning table in the GUI (an "OC" badge appears on TPVs that have the worker armed) and from the CLI:
+
+```
+nvmesh tpv show -n <name>
+```
+
+For kernel-level counters, read `/proc/nvmeibc/tpv/<name>/compaction` on the client host:
+
+| Field | Description |
+|---|---|
+| `online.state` | One of: `idle_below_arm` (waiting for wastage to cross threshold), `armed_running` (worker active), `idle_disabled_by_mgmt` (disabled via management), `idle_disabled_by_op` (disabled via operator `/proc` override). |
+| `online.wastage_pct` | Current wastage percentage (live read from the allocator). |
+| `online.arm_high_pct` | Effective arm threshold in effect (shows `tpv=N mod=M` where N is the per-TPV value and M is the cluster-wide module param). |
+| `online.arm_low_pct` | Effective disarm threshold in effect (same format). |
+| `online.relocations_ok` | Cumulative slot relocations successfully committed since attach. |
+| `online.aborts_by_write_conflict` | Relocations aborted because a concurrent guest write claimed the slot; normal under write-active workloads. |
+| `online.aborts_by_other` | Relocations aborted for other reasons (CDV I/O error, OOM); investigate if non-zero. |
+
+To reset the lifetime counters:
+
+```
+echo 1 | sudo tee /proc/nvmeibc/tpv/<name>/stats
+```
+
+#### Operator override
+
+An operator can temporarily suspend online compaction for a specific TPV without going through management:
+
+```
+echo "online_disable" | sudo tee /proc/nvmeibc/tpv/<name>/compaction
+echo "online_enable"  | sudo tee /proc/nvmeibc/tpv/<name>/compaction
+```
+
+The override takes effect immediately and is visible as `idle_disabled_by_op` in `online.state`. It does not persist across TPV detach/re-attach; the management-carried setting (`online_disabled_by_mgmt`) always re-applies on each attach from the TPV record in the database.
+
+#### Cluster-wide defaults (module parameters)
+
+The module parameters `tpv_online_arm_high_pct` (default `30`) and `tpv_online_arm_low_pct` (default `15`) act as cluster-wide fallbacks. A per-TPV setting of `0` for either threshold means "inherit the module parameter". Because management always sends the TPV's stored values on attach — defaulting to `30`/`15` at create time — the module parameters are normally overridden and serve only as a last-resort default for edge cases such as an older client module receiving an attach message from a newer management server that does not yet include these fields.
+
+See [Module Parameters](#module-parameters) for instructions on modifying module parameters.
+
 # General Settings
 
 In the NVMesh GUI, click Settings and then click General to reach the general settings governing various aspects of NVMesh behavior. After making any changes in settings, use the "Save" button at the top of the panel to persist them.
@@ -3578,6 +3679,7 @@ The TPV table is accessible from the Thin Provisioning section of the GUI, acces
 | **Meta Extent Size** | The mapping granularity on the metadata CDV (split-mode TPVs only; shows `—` for single-CDV TPVs). |
 | **CDV Extents** | The number of CDV extents currently assigned to this TPV by the TOMA allocator (data side). |
 | **TPV Extents In Use** | The number of virtual extents currently mapped to physical storage, shown as `in use / total virtual extents`. |
+| **Online Compaction** | The online compaction configuration for this TPV. Shows **Off** when online compaction is disabled. When enabled, shows the armed range as `On L-H%` where `L` is the disarm threshold (`onlineCompactionArmLowPct`) and `H` is the arm threshold (`onlineCompactionArmHighPct`); for example `On 15-30%` means the background worker arms when CDV wastage exceeds 30% and disarms when it falls below 15%. See [Online Compaction](#online-compaction) for details. |
 | **Client** | The client to which this TPV is currently exclusively attached. Shows the client name, or *(Detached)* if no client is attached. An **Evicting** badge is shown when the TPV's exclusive attachment is in the process of being released from a client. |
 | **Encryption** | The encryption state of the TPV: **Encrypted** (green), **Init Required** (yellow), **In Progress** (blue), **Error** (red), or — if encryption is not enabled. |
 | **Status** | The availability status of the TPV (Online, Offline, etc.). IO availability depends on both the data CDV and, for split-mode TPVs, the metadata CDV — the TPV degrades if either is non-Online. |
