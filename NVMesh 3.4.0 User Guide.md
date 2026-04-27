@@ -1263,7 +1263,7 @@ Non-NVMesh package dependencies for Red Hat Enterprise Linux (RHEL) 8.x and comp
 | --- | --- |
 | nvmesh-base | ethtool <br> smartmontools <br> util-linux |
 | nvmesh-client | nvmesh-base <br> xz |
-| nvmesh-target | nvmesh-client + <br> 2.6.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
+| nvmesh-target | nvmesh-client + <br> 2.8.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
 
 For RDMA environments, on service startup, the following packages are required:
 
@@ -1281,7 +1281,7 @@ Non-NVMesh package dependencies for the Ubuntu 22.04 distribution are presented 
 | --- | --- |
 | nvmesh-base | ethtool <br> smartmontools <br> util-linux |
 | nvmesh-client | nvmesh-base <br> xz-utils |
-| nvmesh-target | nvmesh-client <br> 2.6.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
+| nvmesh-target | nvmesh-client <br> 2.8.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
 
 In addition, for RDMA environments, on service startup, the following are required:
 
