@@ -1263,13 +1263,32 @@ Non-NVMesh package dependencies for Red Hat Enterprise Linux (RHEL) 8.x and comp
 | --- | --- |
 | nvmesh-base | ethtool <br> smartmontools <br> util-linux |
 | nvmesh-client | nvmesh-base <br> xz |
-| nvmesh-target | nvmesh-client + <br> 2.8.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
+| nvmesh-target | nvmesh-client + <br> 2.6.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
 
 For RDMA environments, on service startup, the following packages are required:
 
 - libibverbs
 - librdmacm
 - libibcm
+- libibmad
+- libibumad
+
+##### Rocky Linux 10.x (rpm)
+
+Non-NVMesh package dependencies for Rocky Linux 10.x are presented in the following table.
+
+**Note:** On Rocky Linux 10.x, librdkafka is not available as a system RPM. The confluent-kafka Python wheel bundles its own librdkafka 2.8.0, so no system librdkafka package is required for the target.
+
+| Package | Dependencies |
+| --- | --- |
+| nvmesh-base | ethtool <br> smartmontools <br> util-linux |
+| nvmesh-client | nvmesh-base <br> xz |
+| nvmesh-target | nvmesh-client + <br> pciutils |
+
+For RDMA environments, on service startup, the following packages are required:
+
+- libibverbs
+- librdmacm
 - libibmad
 - libibumad
 
@@ -1281,7 +1300,7 @@ Non-NVMesh package dependencies for the Ubuntu 22.04 distribution are presented 
 | --- | --- |
 | nvmesh-base | ethtool <br> smartmontools <br> util-linux |
 | nvmesh-client | nvmesh-base <br> xz-utils |
-| nvmesh-target | nvmesh-client <br> 2.8.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
+| nvmesh-target | nvmesh-client <br> 2.6.0 >= librdkafka >= 1.6.1, Recommended: > 2.1.2 <br> pciutils |
 
 In addition, for RDMA environments, on service startup, the following are required:
 
@@ -1818,6 +1837,17 @@ enabled=1
 gpgkey=https://pgp.mongodb.com/server-7.0.asc
 ```
 
+For Rocky Linux 10.x, no MongoDB 7.0 repo for RHEL 10 is available yet. Use the RHEL 9 repo as a workaround. MongoDB 7.0 requires AVX CPU support.
+
+```
+[mongodb-org-7.0]
+name=MongoDB Repository
+baseurl=https://repo.mongodb.org/yum/redhat/9/mongodb-org/7.0/x86_64/
+gpgcheck=0
+enabled=1
+gpgkey=https://www.mongodb.org/static/pgp/server-7.0.asc
+```
+
 Then run the following command unless a specific subversion is needed:
 
 ```bash
@@ -1909,11 +1939,21 @@ See [MongoDB Connection Options](#Mongo_Connection_Options) for guidance on conf
 
 To install NodeJS, setup the nodesource repository for your Linux distribution as described [here](https://nodejs.org/en/download) or follow the instructions below. Note that NodeJS 18.x is mandatory for this version of NVMesh.
 
-For RHEL compatible, perform the following:
+For RHEL 8.x / Rocky 8.x compatible, perform the following:
 
 ```bash
 curl --silent --location https://rpm.nodesource.com/setup_18.x | sudo -E bash –
 yum -y install nodejs
+```
+
+For Rocky Linux 10.x, the distribution ships a newer Node.js by default, which must be removed before installing Node.js 18:
+
+```bash
+yum remove -y nodejs npm || true
+yum module reset -y nodejs || true
+yum module disable -y nodejs || true
+curl -fsSL https://rpm.nodesource.com/setup_18.x | bash -
+yum install -y nodejs-18.* --allowerasing
 ```
 
 For Ubuntu, perform the following:
@@ -1929,7 +1969,7 @@ Kafka must be installed on one or more servers, as it is used for communication 
 
 JDK is a pre-requisite for installing a Kafka server.
 
-For RHEL compatible, perform the following or similar to install a JDK:
+For RHEL 8.x / Rocky 8.x compatible, perform the following or similar to install a JDK:
 
 Option 1: Minimal JDK without monitoring tools
 
@@ -1941,6 +1981,22 @@ Option 2: Use a more complete JDK for monitoring tools as well
 
 ```bash
 yum -y install java-1.8.0-openjdk-devel
+```
+
+For Rocky Linux 10.x, `java-1.8.0-openjdk` is not available. Install a newer JDK with version fallback:
+
+```bash
+yum install -y java-21-openjdk-headless \
+  || yum install -y java-21-openjdk \
+  || yum install -y java-17-openjdk-headless
+```
+
+Set `JAVA_HOME` so Kafka can locate the JDK:
+
+```bash
+echo 'export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))' | tee /etc/profile.d/java.sh
+echo 'export PATH=$JAVA_HOME/bin:$PATH' | tee -a /etc/profile.d/java.sh
+source /etc/profile.d/java.sh
 ```
 
 For Ubuntu, perform the following:
@@ -2059,11 +2115,30 @@ Start the Kafka service by running, `systemctl start kafka` and monitoring using
 
 Any node with NVMesh components must communicate with NVMesh management and therefore requires confluent-kafka and its dependencies.
 
-For RHEL compatible, to install perform the following as root:
+For RHEL 8.x / Rocky 8.x compatible, to install perform the following as root:
 
 ```bash
 yum install python2-devel librdkafka-devel-2.1.1-1.cflt.el8.x86_64
 pip2.7 install confluent-kafka==2.1.1 configparser
+```
+
+For Rocky Linux 10.x, Python 2.7 is not available. The confluent-kafka wheel for Python 3.12 bundles its own librdkafka 2.8.0, so no system librdkafka package is required:
+
+```bash
+python3.12 -m pip install confluent-kafka
+```
+
+Verify:
+
+```bash
+python3.12 -c "import confluent_kafka; print('confluent-kafka:', confluent_kafka.__version__); print('librdkafka   :', confluent_kafka.libversion()[0])"
+```
+
+Expected output:
+
+```
+confluent-kafka: 2.8.0
+librdkafka   : 2.8.0
 ```
 
 For Ubuntu, to install perform the following as root:
