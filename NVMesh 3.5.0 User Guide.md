@@ -3171,7 +3171,8 @@ The following tables defines the TOMA configuration parameters defined using `to
 | praid_activation_timeout_sec | Defines how long, in seconds, to wait when initializing a PRAID for all components to be ready before proceeding to start it in a degraded state. Default: 20. |
 | udp_max_header_length | Defines the maximum UDP header length for the current network so that TOMA does not exceed the network’s MTU for TOMA-TOMA communication. |
 | disable_periodic_smart_polling | Defines how often TOMA reads NVMe drives S.M.A.R.T. information. |
-| tracer_debug_level | Sets the tracer debug level as described in Binary Tracing. |
+| manual_toma_tracer_debug_level | Sets the tracer debug level as described in Binary Tracing. |
+| trace_write_to_disk_mode | Sets the tracer poller mode, 0=in mem only, 1=flush to disk, 2=dump logs now(auto reverts to 0 after dump). |
 | log_snapshotting_mode | Determines whether traces are snapshotted on critical TOMA events. |
 | kafka_get_offset_timeout_secs | Determines the timeout for reading information from Kafka. |
 | attach_timeout_sec | Determines the timeout for waiting for a volume to be attached and IO enabled by the local client for recovery purposes. |
@@ -3802,6 +3803,11 @@ To change the memory and drive footprint, configure the following options in `/e
 |  | TOMA_NUM_OF_TRACE_LOGS | Specifies the number of files of history to keep. <br>The default value of 40 translates to ~1.8 GB in total when `TOMA_TRACE_LOG_SIZE="48"`. <br>This parameter can be between 1-100. |
 
 For additional instructions on how to view binary traces and how to control their footprint, contact NVMesh support.
+
+## Logs snapshots utility
+Used to manage snapshots of logs. Automatically used by Toma upon specific critical events to save snapshots of binary logs for further investigation
+Can be manually used to garbage collect old snapshots, monitor disk usage, create snapshots, etc
+Run `/opt/nvmesh/bin/logsnap help` for more info
 
 # Alerts
 
