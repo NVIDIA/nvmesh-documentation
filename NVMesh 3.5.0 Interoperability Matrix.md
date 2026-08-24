@@ -78,6 +78,7 @@ The drives are listed by manufacturer in alphabetical order.
 | Samsung | SM963 | No | U.2 |  |
 | Samsung | SZ985 | No | AIC |  |
 | Samsung | XS1715 | No | U.2, AIC |  |
+| Sandisk | SN861 | Yes | U.2, E1.S, E3.S |  |
 | Solidigm | DC P432X Series | No | U.2, E1.L |  |
 | Solidigm | DC P4420 Series | No | U.2 |  |
 | Solidigm | DC P4500 Series | No | U.2, AIC |  |
