@@ -1282,15 +1282,22 @@ This version of NVMesh is compatible with NodeJS version 18.
 
 #### Clients and Targets
 
+Non-NVMesh common package dependencies are presented in the following table:
+
+| Package | Dependencies |
+| --- | --- |
+| nvmesh-base | ethtool <br> smartmontools <br> util-linux |
+| nvmesh-target | nvmesh-client + <br> librdkafka >= 2.6.0, Recommended: 2.13.0 <br> pciutils |
+**<u>Note:</u>** Compatible libradkafka might not be available as RPM/Deb on some distributions. Best practice is to install it from sources: https://github.com/confluentinc/librdkafka/archive/refs/tags/v$version.tar.gz
+
 ##### RHEL and Rocky 8.x (rpm)
 
 Non-NVMesh package dependencies for Red Hat Enterprise Linux (RHEL) 8.x and compatible distributions like Rocky Linux are presented in the following table.
 
 | Package | Dependencies |
 | --- | --- |
-| nvmesh-base | ethtool <br> smartmontools <br> util-linux |
 | nvmesh-client | nvmesh-base <br> xz |
-| nvmesh-target | nvmesh-client + <br> librdkafka >= 2.6.0, Recommended: 2.13.0 <br> pciutils |
+
 
 For RDMA environments, on service startup, the following packages are required:
 
@@ -1308,9 +1315,7 @@ Non-NVMesh package dependencies for Rocky Linux 10.x are presented in the follow
 
 | Package | Dependencies |
 | --- | --- |
-| nvmesh-base | ethtool <br> smartmontools <br> util-linux |
 | nvmesh-client | nvmesh-base <br> xz |
-| nvmesh-target | nvmesh-client + <br> pciutils |
 
 For RDMA environments, on service startup, the following packages are required:
 
@@ -1325,9 +1330,7 @@ Non-NVMesh package dependencies for the Ubuntu 22.04 distribution are presented 
 
 | Package | Dependencies |
 | --- | --- |
-| nvmesh-base | ethtool <br> smartmontools <br> util-linux |
 | nvmesh-client | nvmesh-base <br> xz-utils |
-| nvmesh-target | nvmesh-client <br> librdkafka >= 2.6.0, Recommended: 2.13.0 <br> pciutils |
 
 In addition, for RDMA environments, on service startup, the following are required:
 
