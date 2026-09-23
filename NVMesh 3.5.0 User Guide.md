@@ -2139,7 +2139,7 @@ Any node with NVMesh components must communicate with NVMesh management and ther
 For RHEL 8.x / Rocky 8.x compatible, to install perform the following as root:
 
 ```bash
-yum install python2-devel librdkafka-devel-2.1.1-1.cflt.el8.x86_64
+yum install python2-devel librdkafka-devel
 pip2.7 install confluent-kafka==2.1.1 configparser
 ```
 

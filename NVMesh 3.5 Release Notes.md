@@ -260,7 +260,7 @@ To install the latest stable version of MongoDB, run:
 ## 6. Install Kafka Client (confluent-kafka)
 
 The confluent-kafka wheel from PyPI bundles its own **librdkafka 2.8.0**.
-The system package librdkafka-2.1.1-7.el10 may be present but is **not loaded** by Python.
+The system package librdkafka may be present but is **not loaded** by Python.
 
 ### Install
 
@@ -294,5 +294,5 @@ Expected:
 2. **Python 3.10** is build-only (make altinstall, does not overwrite system Python).
 3. **Node.js** native newer version must be removed and module disabled before installing Node 18.
 4. **MongoDB Community Edition 8.0** — installed from the MongoDB yum repository for Red Hat / CentOS 9 compatible packages.
-5. **Kafka client** — bundled librdkafka 2.8.0 inside wheel; system RPM 2.1.1 unused by Python.
+5. **Kafka client** — bundled librdkafka 2.8.0 inside wheel; system RPM unused by Python.
 6. **Java** — JAVA_HOME only needed if running a Kafka broker locally.
